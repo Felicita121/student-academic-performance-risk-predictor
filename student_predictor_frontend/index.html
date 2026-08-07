@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Student Academic Performance & At-Risk Predictor">
+  <title>StudentIQ — Academic Risk Predictor</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar" id="sidebar">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true">S</div>
+        <div class="brand-copy">
+          <strong>StudentIQ</strong>
+          <span>Academic Intelligence</span>
+        </div>
+      </div>
+
+      <nav class="nav" aria-label="Main navigation">
+        <p class="nav-label">Workspace</p>
+        <button class="nav-item active" data-section="dashboard"><span class="nav-icon">⌂</span>Dashboard</button>
+        <button class="nav-item" data-section="predictor"><span class="nav-icon">◈</span>Risk Predictor</button>
+        <button class="nav-item" data-section="students"><span class="nav-icon">◎</span>Students</button>
+        <button class="nav-item" data-section="analytics"><span class="nav-icon">▥</span>Analytics</button>
+      </nav>
+
+      <div class="sidebar-bottom">
+        <div class="system-card">
+          <div class="system-card-top">
+            <span class="status-dot" id="statusDot"></span>
+            <span id="connectionText">Checking API…</span>
+          </div>
+          <small>Prediction service</small>
+        </div>
+        <button class="sidebar-settings" id="settingsBtn"><span>⚙</span> API Settings</button>
+      </div>
+    </aside>
+
+    <div class="mobile-backdrop" id="mobileBackdrop"></div>
+
+    <main class="main-content">
+      <header class="topbar">
+        <button class="mobile-menu" id="mobileMenu" aria-label="Open navigation">☰</button>
+        <div class="page-heading">
+          <p class="eyebrow" id="pageEyebrow">ACADEMIC MONITORING</p>
+          <h1 id="pageTitle">Dashboard</h1>
+          <p id="pageSubtitle">A clear view of student performance and academic risk.</p>
+        </div>
+        <div class="top-actions">
+          <span class="live-pill"><span></span> Live data</span>
+          <button class="icon-btn" id="refreshBtn" title="Refresh data" aria-label="Refresh data">↻</button>
+        </div>
+      </header>
+
+      <!-- Dashboard -->
+      <section class="section active" id="dashboard">
+        <div class="hero-card">
+          <div>
+            <p class="hero-kicker">STUDENT SUCCESS MONITOR</p>
+            <h2>Identify academic risk before it becomes a setback.</h2>
+            <p>Use the trained prediction model to assess performance indicators and support timely academic intervention.</p>
+            <button class="primary-btn" data-go="predictor">Run a prediction <span>→</span></button>
+          </div>
+          <div class="hero-orb" aria-hidden="true">
+            <div class="orb-inner"><strong>AI</strong><span>Risk<br>Insight</span></div>
+          </div>
+        </div>
+
+        <div class="stats-grid">
+          <article class="stat-card accent-blue">
+            <div class="stat-icon">◎</div>
+            <div><span>Total students</span><strong id="totalStudents">—</strong><small>Records currently loaded</small></div>
+          </article>
+          <article class="stat-card accent-red">
+            <div class="stat-icon">!</div>
+            <div><span>High risk</span><strong id="highRisk">—</strong><small>Immediate attention recommended</small></div>
+          </article>
+          <article class="stat-card accent-amber">
+            <div class="stat-icon">~</div>
+            <div><span>Medium risk</span><strong id="mediumRisk">—</strong><small>Students to monitor</small></div>
+          </article>
+          <article class="stat-card accent-green">
+            <div class="stat-icon">✓</div>
+            <div><span>Low risk</span><strong id="lowRisk">—</strong><small>Currently lower risk</small></div>
+          </article>
+        </div>
+
+        <div class="dashboard-grid">
+          <article class="card risk-overview">
+            <div class="card-header">
+              <div><p class="eyebrow">RISK DISTRIBUTION</p><h3>Current student risk</h3></div>
+              <span class="soft-badge" id="riskTotalLabel">— students</span>
+            </div>
+            <div class="risk-chart-area">
+              <div class="donut" id="riskDonut"><div class="donut-center"><strong id="riskDonutTotal">0</strong><span>students</span></div></div>
+              <div class="legend">
+                <div><span class="legend-dot high"></span><span>High risk</span><strong id="legendHigh">0%</strong></div>
+                <div><span class="legend-dot medium"></span><span>Medium risk</span><strong id="legendMedium">0%</strong></div>
+                <div><span class="legend-dot low"></span><span>Low risk</span><strong id="legendLow">0%</strong></div>
+              </div>
+            </div>
+          </article>
+
+          <article class="card performance-card">
+            <div class="card-header">
+              <div><p class="eyebrow">PERFORMANCE SNAPSHOT</p><h3>Class indicators</h3></div>
+            </div>
+            <div class="metric-bars">
+              <div class="metric-row"><div><span>Attendance</span><strong id="avgAttendance">—</strong></div><div class="progress"><i id="attendanceBar"></i></div></div>
+              <div class="metric-row"><div><span>Homework</span><strong id="avgHomework">—</strong></div><div class="progress"><i id="homeworkBar"></i></div></div>
+              <div class="metric-row"><div><span>Midterm</span><strong id="avgMidterm">—</strong></div><div class="progress"><i id="midtermBar"></i></div></div>
+              <div class="metric-row"><div><span>Study hours / week</span><strong id="avgStudyHours">—</strong></div><div class="progress"><i id="studyBar"></i></div></div>
+            </div>
+          </article>
+        </div>
+
+        <article class="card table-card">
+          <div class="card-header">
+            <div><p class="eyebrow">RECENT RECORDS</p><h3>Latest student predictions</h3></div>
+            <button class="link-btn" data-go="students">View all →</button>
+          </div>
+          <div class="table-wrap"><table><thead><tr><th>Student</th><th>Attendance</th><th>Homework</th><th>Midterm</th><th>Study hours</th><th>Risk</th></tr></thead><tbody id="recentTable"></tbody></table></div>
+        </article>
+      </section>
+
+      <!-- Predictor -->
+      <section class="section" id="predictor">
+        <div class="section-intro"><p class="eyebrow">MODEL-POWERED ASSESSMENT</p><h2>Risk Predictor</h2><p>Enter four academic indicators to estimate pass probability and identify the student's current risk level.</p></div>
+        <div class="predictor-layout">
+          <form class="card predictor-form" id="predictForm">
+            <div class="form-header"><div class="step-number">01</div><div><h3>Academic indicators</h3><p>Use values from 0–100 for percentages.</p></div></div>
+            <div class="input-grid">
+              <label class="field"><span>Attendance <b>%</b></span><div class="input-with-range"><input type="number" name="attendance_pct" id="attendanceInput" min="0" max="100" step="0.1" placeholder="85" required><input type="range" id="attendanceRange" min="0" max="100" step="1" value="0"></div><small>Class attendance percentage</small></label>
+              <label class="field"><span>Homework completion <b>%</b></span><div class="input-with-range"><input type="number" name="homework_pct" id="homeworkInput" min="0" max="100" step="0.1" placeholder="75" required><input type="range" id="homeworkRange" min="0" max="100" step="1" value="0"></div><small>Completed homework percentage</small></label>
+              <label class="field"><span>Midterm score <b>%</b></span><div class="input-with-range"><input type="number" name="midterm_score" id="midtermInput" min="0" max="100" step="0.1" placeholder="68" required><input type="range" id="midtermRange" min="0" max="100" step="1" value="0"></div><small>Most recent midterm score</small></label>
+              <label class="field"><span>Study hours / week <b>hrs</b></span><div class="input-with-range"><input type="number" name="study_hours_per_week" id="studyInput" min="0" step="0.1" placeholder="12" required><input type="range" id="studyRange" min="0" max="60" step="1" value="0"></div><small>Average weekly study time</small></label>
+            </div>
+            <div class="form-actions"><button class="secondary-btn" type="reset">Clear</button><button class="primary-btn" id="predictBtn" type="submit">Analyze risk <span>→</span></button></div>
+            <div class="error" id="predictError" role="alert"></div>
+          </form>
+
+          <article class="card result-card" id="resultPanel">
+            <div class="result-empty" id="resultEmpty"><div class="result-illustration">✦</div><p class="eyebrow">MODEL OUTPUT</p><h3>Ready for assessment</h3><p>Submit the student's academic indicators to see a prediction.</p></div>
+            <div class="result-content hidden" id="resultContent">
+              <div class="result-top"><div><p class="eyebrow">MODEL OUTPUT</p><h3 id="resultTitle">Prediction</h3></div><span id="riskBadge" class="risk-badge">LOW RISK</span></div>
+              <div class="probability-ring" id="probabilityRing"><div><strong id="probability">0%</strong><span>pass probability</span></div></div>
+              <p class="result-message" id="resultMessage"></p>
+              <div class="result-actions"><button class="primary-btn" id="saveStudentBtn">Save student <span>＋</span></button><button class="secondary-btn" id="newPredictionBtn">New prediction</button></div>
+              <div class="result-note"><span>i</span><p>This is a model-based prediction, not a final academic judgment.</p></div>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <!-- Students -->
+      <section class="section" id="students">
+        <div class="section-intro row-between"><div><p class="eyebrow">STUDENT RECORDS</p><h2>Students</h2><p>Search, filter and review saved prediction records.</p></div><button class="primary-btn" data-go="predictor">＋ New assessment</button></div>
+        <article class="card table-card">
+          <div class="table-toolbar"><div class="search-box"><span>⌕</span><input id="studentSearch" type="search" placeholder="Search student ID…"></div><div class="filter-group" id="riskFilters"><button class="filter-btn active" data-filter="all">All</button><button class="filter-btn" data-filter="high">High</button><button class="filter-btn" data-filter="medium">Medium</button><button class="filter-btn" data-filter="low">Low</button></div></div>
+          <div class="table-wrap"><table><thead><tr><th>Student</th><th>Attendance</th><th>Homework</th><th>Midterm</th><th>Study hours</th><th>Performance</th><th>Pass probability</th><th>Risk</th><th></th></tr></thead><tbody id="studentsTable"></tbody></table></div>
+          <div class="table-footer"><span id="studentCountLabel">0 records</span></div>
+        </article>
+      </section>
+
+      <!-- Analytics -->
+      <section class="section" id="analytics">
+        <div class="section-intro"><p class="eyebrow">ACADEMIC INSIGHTS</p><h2>Analytics</h2><p>A compact view of the indicators currently available to the prediction system.</p></div>
+        <div class="analytics-grid">
+          <article class="card analytics-card"><p class="eyebrow">RISK COUNTS</p><h3>Students by risk level</h3><div class="big-number" id="analyticsTotal">0</div><div class="stacked-bar"><i class="high" id="stackHigh"></i><i class="medium" id="stackMedium"></i><i class="low" id="stackLow"></i></div><div class="stacked-labels"><span>High <b id="analyticsHigh">0</b></span><span>Medium <b id="analyticsMedium">0</b></span><span>Low <b id="analyticsLow">0</b></span></div></article>
+          <article class="card analytics-card"><p class="eyebrow">AVERAGES</p><h3>Class performance</h3><div class="average-list"><div><span>Attendance</span><strong id="analyticsAttendance">—</strong></div><div><span>Homework</span><strong id="analyticsHomework">—</strong></div><div><span>Midterm</span><strong id="analyticsMidterm">—</strong></div><div><span>Study hours</span><strong id="analyticsStudy">—</strong></div></div></article>
+          <article class="card analytics-card wide"><p class="eyebrow">MODEL CONTEXT</p><h3>How the predictor reads the data</h3><div class="context-grid"><div><span>01</span><h4>Academic inputs</h4><p>Attendance, homework completion, midterm score and weekly study hours are supplied to the prediction API.</p></div><div><span>02</span><h4>Feature engineering</h4><p>The backend derives additional indicators before passing the record to the trained model.</p></div><div><span>03</span><h4>Risk classification</h4><p>The model returns a pass probability which the application maps to high, medium or low risk.</p></div></div></article>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- Student detail modal -->
+  <div class="modal-overlay" id="detailModal" aria-hidden="true"><div class="modal-card"><button class="modal-close" data-close="detailModal">×</button><p class="eyebrow">STUDENT RECORD</p><h3 id="detailTitle">Student #—</h3><div class="detail-grid" id="detailGrid"></div></div></div>
+
+  <!-- API settings modal -->
+  <div class="modal-overlay" id="settingsModal" aria-hidden="true"><div class="modal-card settings-modal"><button class="modal-close" data-close="settingsModal">×</button><p class="eyebrow">CONNECTION</p><h3>API Settings</h3><p class="modal-sub">Use the local URL while developing. Later, replace it with your deployed Flask API URL.</p><label class="field"><span>Backend API base URL</span><input id="apiBaseInput" type="url" placeholder="http://127.0.0.1:5000/api"></label><div class="modal-actions"><button class="secondary-btn" data-close="settingsModal">Cancel</button><button class="primary-btn" id="saveApiBtn">Save & reconnect</button></div></div></div>
+
+  <div class="toast" id="toast" role="status"></div>
+  <script src="config.js"></script>
+  <script src="script.js"></script>
+</body>
+</html>
