@@ -39,6 +39,9 @@ The UI also has **API Settings** in the sidebar, and the selected URL is stored 
 - Student detail modal
 - Delete saved students
 - Analytics overview
+- Model QA page with at-risk recall and confusion matrix
+- Named student records and intervention recommendations
+- Read-only demo data fallback when the hosted API is waking or unavailable
 - API health/status indicator
 - Local/deployment API URL configuration
 

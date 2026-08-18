@@ -1,0 +1,32 @@
+{
+  "threshold": 0.66,
+  "confusion_matrix": {
+    "true_negative": 59,
+    "false_positive": 1,
+    "false_negative": 0,
+    "true_positive": 40
+  },
+  "accuracy": 0.99,
+  "at_risk_recall": 1.0,
+  "at_risk_precision": 0.9756,
+  "specificity": 0.9833,
+  "false_negative_rate": 0.0,
+  "students_evaluated": 100,
+  "model_type": "Logistic Regression",
+  "model_version": "2.0",
+  "positive_class": "at_risk",
+  "evaluation_method": "5-fold stratified cross-validation",
+  "feature_count": 8,
+  "features": [
+    "attendance_pct",
+    "homework_pct",
+    "midterm_score",
+    "study_hours_per_week",
+    "absence_rate",
+    "performance_score",
+    "study_efficiency",
+    "low_engagement_flag"
+  ],
+  "objective": "Minimise false negatives for at-risk students",
+  "dataset_note": "The supplied 100-row teaching dataset is small and highly structured. Cross-validation results should not be treated as proof of real-world performance."
+}

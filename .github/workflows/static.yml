@@ -6,7 +6,7 @@ on:
       - main
     paths:
       - "student_predictor_frontend/**"
-      - ".github/workflows/pages.yml"
+      - ".github/workflows/static.yml"
   workflow_dispatch:
 
 permissions:

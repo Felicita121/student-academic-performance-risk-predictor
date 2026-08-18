@@ -7,12 +7,14 @@ let currentFilter = "all";
 let currentSearch = "";
 let lastPrediction = null;
 let toastTimer;
+let usingDemoData = false;
 
 const pageMeta = {
   dashboard: ["ACADEMIC MONITORING", "Dashboard", "A clear view of student performance and academic risk."],
   predictor: ["MODEL-POWERED ASSESSMENT", "Risk Predictor", "Estimate pass probability and identify current academic risk."],
   students: ["STUDENT RECORDS", "Students", "Search, filter and review saved prediction records."],
-  analytics: ["ACADEMIC INSIGHTS", "Analytics", "A compact view of the indicators available to the model."]
+  analytics: ["ACADEMIC INSIGHTS", "Analytics", "A compact view of the indicators available to the model."],
+  evaluation: ["QA & ANALYST", "Model Evaluation", "Cross-validated evidence focused on missed at-risk students."]
 };
 
 function normalizeBaseUrl(url) {
@@ -43,13 +45,23 @@ function riskBadge(risk) {
 }
 
 async function api(path, options = {}) {
-  const response = await fetch(`${API_BASE}${path}`, {
-    ...options,
-    headers: { ...(options.body ? { "Content-Type": "application/json" } : {}), ...(options.headers || {}) }
-  });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.error || `Request failed (${response.status})`);
-  return data;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 20000);
+  try {
+    const response = await fetch(`${API_BASE}${path}`, {
+      ...options,
+      signal: controller.signal,
+      headers: { ...(options.body ? { "Content-Type": "application/json" } : {}), ...(options.headers || {}) }
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || `Request failed (${response.status})`);
+    return data;
+  } catch (error) {
+    if (error.name === "AbortError") throw new Error("The prediction service timed out. Please try again.");
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 function switchSection(sectionId) {
@@ -65,6 +77,7 @@ function switchSection(sectionId) {
 
   if (sectionId === "dashboard" || sectionId === "analytics") refreshData();
   if (sectionId === "students") renderStudentsTable();
+  if (sectionId === "evaluation") loadModelMetrics();
 }
 
 function closeSidebar() {
@@ -86,7 +99,11 @@ function setConnection(online, count = null) {
   $("#statusDot").classList.toggle("offline", !online);
   $("#connectionText").textContent = online
     ? `API connected${count === null ? "" : ` · ${count} loaded`}`
-    : "API offline";
+    : usingDemoData ? "Demo data · API offline" : "API offline";
+  $("#dataModePill").innerHTML = online
+    ? "<span></span> Live API"
+    : usingDemoData ? "<span></span> Demo data" : "<span></span> API offline";
+  $("#dataModePill").classList.toggle("demo", !online);
 }
 
 async function checkHealth() {
@@ -163,7 +180,7 @@ function renderRecent(data) {
   const rows = [...data].sort((a, b) => Number(b.student_id) - Number(a.student_id)).slice(0, 6);
   $("#recentTable").innerHTML = rows.length ? rows.map(student => `
     <tr data-id="${student.student_id}" class="clickable-row">
-      <td><strong class="student-number">#${escapeHtml(student.student_id)}</strong></td>
+      <td><strong class="student-number">${escapeHtml(student.student_name || `Student ${student.student_id}`)}</strong><small class="student-id">#${escapeHtml(student.student_id)}</small></td>
       <td>${Number(student.attendance_pct).toFixed(1)}%</td>
       <td>${Number(student.homework_pct).toFixed(1)}%</td>
       <td>${Number(student.midterm_score).toFixed(1)}%</td>
@@ -176,6 +193,7 @@ function renderRecent(data) {
 async function refreshData() {
   try {
     const data = await api("/students");
+    usingDemoData = false;
     students = Array.isArray(data) ? data : [];
     updateRiskOverview(students);
     updateAverages(students);
@@ -183,15 +201,30 @@ async function refreshData() {
     renderStudentsTable();
     await checkHealth();
   } catch (error) {
-    setConnection(false);
-    showToast(error.message || "Unable to load student data.", "error");
+    try {
+      const response = await fetch("demo_students.json");
+      if (!response.ok) throw new Error("Demo data is unavailable.");
+      students = await response.json();
+      usingDemoData = true;
+      updateRiskOverview(students);
+      updateAverages(students);
+      renderRecent(students);
+      renderStudentsTable();
+      setConnection(false);
+      showToast("Live API unavailable — showing read-only demo data.");
+    } catch {
+      usingDemoData = false;
+      setConnection(false);
+      showToast(error.message || "Unable to load student data.", "error");
+    }
   }
 }
 
 function filteredStudents() {
   return students.filter(student => {
     const matchesRisk = currentFilter === "all" || student.risk_flag === currentFilter;
-    const matchesSearch = !currentSearch || String(student.student_id).includes(currentSearch);
+    const haystack = `${student.student_id} ${student.student_name || ""}`.toLowerCase();
+    const matchesSearch = !currentSearch || haystack.includes(currentSearch.toLowerCase());
     return matchesRisk && matchesSearch;
   }).sort((a, b) => Number(b.student_id) - Number(a.student_id));
 }
@@ -202,13 +235,13 @@ function renderStudentsTable() {
   $("#studentCountLabel").textContent = `${data.length} of ${students.length} record${students.length === 1 ? "" : "s"}`;
   $("#studentsTable").innerHTML = data.length ? data.map(student => `
     <tr>
-      <td><button class="student-link" data-id="${student.student_id}">#${escapeHtml(student.student_id)}</button></td>
+      <td><button class="student-link" data-id="${student.student_id}">${escapeHtml(student.student_name || `Student ${student.student_id}`)}</button><small class="student-id">#${escapeHtml(student.student_id)}</small></td>
       <td>${Number(student.attendance_pct).toFixed(1)}%</td>
       <td>${Number(student.homework_pct).toFixed(1)}%</td>
       <td>${Number(student.midterm_score).toFixed(1)}%</td>
       <td>${Number(student.study_hours_per_week).toFixed(1)} hrs</td>
       <td>${Number(student.performance_score).toFixed(1)}</td>
-      <td>${formatPercent(student.risk_probability)}</td>
+      <td>${formatPercent(student.pass_probability ?? (1 - Number(student.risk_probability)))}</td>
       <td>${riskBadge(student.risk_flag)}</td>
       <td><button class="delete-btn" data-id="${student.student_id}" title="Delete student">⌫</button></td>
     </tr>`).join("") : `<tr><td colspan="9" class="empty-cell">No records match your search.</td></tr>`;
@@ -232,6 +265,7 @@ $("#riskFilters").addEventListener("click", event => {
 async function deleteStudent(id) {
   const student = students.find(item => String(item.student_id) === String(id));
   if (!student) return;
+  if (usingDemoData) return showToast("Demo records are read-only. Reconnect the API to make changes.", "error");
   if (!window.confirm(`Delete Student #${id}? This action cannot be undone.`)) return;
   try {
     await api(`/students/${id}`, { method: "DELETE" });
@@ -245,11 +279,13 @@ async function deleteStudent(id) {
 function openStudentDetail(id) {
   const student = students.find(item => String(item.student_id) === String(id));
   if (!student) return;
-  $("#detailTitle").textContent = `Student #${student.student_id}`;
+  $("#detailTitle").textContent = student.student_name || `Student #${student.student_id}`;
   $("#detailGrid").innerHTML = [
+    ["Student ID", `#${student.student_id}`],
     ["Risk level", riskBadge(student.risk_flag)],
-    ["Pass probability", formatPercent(student.risk_probability)],
-    ["Prediction", student.prediction === 1 ? "Likely to pass" : "At risk of failing"],
+    ["At-risk probability", formatPercent(student.risk_probability)],
+    ["Pass probability", formatPercent(student.pass_probability ?? (1 - Number(student.risk_probability)))],
+    ["Prediction", student.predicted_outcome === "fail" || student.prediction === 0 ? "At risk of failing" : "Likely to pass"],
     ["Attendance", `${Number(student.attendance_pct).toFixed(1)}%`],
     ["Homework", `${Number(student.homework_pct).toFixed(1)}%`],
     ["Midterm", `${Number(student.midterm_score).toFixed(1)}%`],
@@ -284,6 +320,7 @@ rangePairs.forEach(([inputId, rangeId]) => {
 function getPredictionPayload() {
   const form = new FormData($("#predictForm"));
   return {
+    student_name: String(form.get("student_name") || "").trim(),
     attendance_pct: Number(form.get("attendance_pct")),
     homework_pct: Number(form.get("homework_pct")),
     midterm_score: Number(form.get("midterm_score")),
@@ -304,7 +341,7 @@ function showPrediction(result) {
   lastPrediction = { ...result, payload: getPredictionPayload() };
   const probability = Number(result.risk_probability);
   const risk = ["high", "medium", "low"].includes(result.risk_flag) ? result.risk_flag : "low";
-  const likelyPass = Number(result.prediction) === 1;
+  const likelyPass = result.predicted_outcome ? result.predicted_outcome === "pass" : Number(result.prediction) === 1;
 
   $("#resultEmpty").classList.add("hidden");
   $("#resultContent").classList.remove("hidden");
@@ -313,11 +350,11 @@ function showPrediction(result) {
   $("#riskBadge").className = `risk-badge ${risk}`;
   $("#riskBadge").innerHTML = `<i></i>${risk} risk`;
   $("#probabilityRing").style.background = `conic-gradient(var(--${risk}) ${Math.min(100, probability * 100)}%, #edf0f5 0)`;
-  $("#resultMessage").textContent = risk === "high"
+  $("#resultMessage").textContent = result.recommendation || (risk === "high"
     ? "This student should receive prompt academic attention and support."
     : risk === "medium"
       ? "This student should be monitored and supported before performance declines further."
-      : "The current indicators suggest a lower academic risk.";
+      : "The current indicators suggest a lower academic risk.");
 }
 
 $("#predictForm").addEventListener("submit", async event => {
@@ -355,6 +392,7 @@ $("#newPredictionBtn").addEventListener("click", () => $("#predictForm").reset()
 
 $("#saveStudentBtn").addEventListener("click", async () => {
   if (!lastPrediction?.payload) return;
+  if (usingDemoData) return showToast("Reconnect the API before saving a student.", "error");
   const button = $("#saveStudentBtn");
   button.disabled = true;
   button.innerHTML = "Saving…";
@@ -387,6 +425,39 @@ $("#saveApiBtn").addEventListener("click", async () => {
 });
 
 const savedApiBase = localStorage.getItem("studentIQApiBase");
-if (savedApiBase) API_BASE = normalizeBaseUrl(savedApiBase);
+const localHostnames = ["localhost", "127.0.0.1", "::1"];
+if (savedApiBase && !localHostnames.includes(window.location.hostname)) {
+  API_BASE = normalizeBaseUrl(savedApiBase);
+}
 
-refreshData();
+function renderModelMetrics(metrics) {
+  if (!metrics?.confusion_matrix) return;
+  const cm = metrics.confusion_matrix;
+  $("#metricRecall").textContent = formatPercent(metrics.at_risk_recall);
+  $("#metricAccuracy").textContent = formatPercent(metrics.accuracy);
+  $("#metricFalseNegatives").textContent = cm.false_negative;
+  $("#metricThreshold").textContent = Number(metrics.threshold).toFixed(2);
+  $("#metricSample").textContent = `${metrics.students_evaluated} students`;
+  $("#matrixTN").textContent = cm.true_negative;
+  $("#matrixFP").textContent = cm.false_positive;
+  $("#matrixFN").textContent = cm.false_negative;
+  $("#matrixTP").textContent = cm.true_positive;
+  $("#modelType").textContent = `${metrics.model_type || "Logistic Regression"} · v${metrics.model_version || "2.0"}`;
+  $("#evaluationMethod").textContent = metrics.evaluation_method || "5-fold stratified cross-validation";
+  $("#datasetNote").textContent = metrics.dataset_note || "This predictor supports staff decisions; it does not replace teacher judgment.";
+}
+
+async function loadModelMetrics() {
+  try {
+    renderModelMetrics(await api("/model-metrics"));
+  } catch {
+    try {
+      const response = await fetch("model_metrics.json");
+      renderModelMetrics(await response.json());
+    } catch {
+      // The rest of the dashboard remains usable if the QA report is unavailable.
+    }
+  }
+}
+
+Promise.allSettled([refreshData(), loadModelMetrics()]);

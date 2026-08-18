@@ -1,0 +1,5 @@
+__pycache__/
+*.py[cod]
+.venv/
+student_predictor_backend/student_records.json
+student_predictor_backend/*.tmp

@@ -1,199 +1,304 @@
-"""
-Student Academic Performance & At-Risk Predictor - Backend API
-Role: Backend Developer
+"""StudentIQ Flask API: records, engineered features and risk predictions."""
 
-Endpoints:
-  GET  /api/students            -> list all students with risk predictions
-  GET  /api/students/<id>       -> get one student
-  POST /api/students            -> add a new student data point (predicts + stores)
-  POST /api/predict             -> predict only, don't store (for a "what-if" check)
-  DELETE /api/students/<id>     -> remove a student
-"""
+from __future__ import annotations
 
-import pickle
 import csv
+import json
 import os
+import pickle
+from pathlib import Path
+from threading import RLock
+
 import pandas as pd
-from flask import Flask, request, jsonify
+from flask import Flask, jsonify, request
+
+from ml_pipeline import (
+    DATA_PATH,
+    METRICS_PATH,
+    MODEL_PATH,
+    RAW_INPUT_FIELDS,
+    engineer_features,
+    train_and_save,
+)
+
+
+BASE_DIR = Path(__file__).resolve().parent
+RECORDS_PATH = Path(os.environ.get("STUDENT_DATA_PATH", BASE_DIR / "student_records.json"))
+LOCK = RLock()
+
+
+def load_bundle() -> dict:
+    if not MODEL_PATH.exists():
+        train_and_save()
+    with MODEL_PATH.open("rb") as handle:
+        loaded = pickle.load(handle)
+    # Reject the earlier bundle whose positive class and threshold semantics
+    # were incompatible with the supervisor's false-negative objective.
+    if loaded.get("positive_class") != "at_risk":
+        loaded, _ = train_and_save()
+    return loaded
+
+
+BUNDLE = load_bundle()
+MODEL = BUNDLE["model"]
+FEATURE_COLS = BUNDLE["features"]
+THRESHOLD = float(BUNDLE["threshold"])
 
 app = Flask(__name__)
 
-MODEL_PATH = os.path.join(os.path.dirname(__file__), 'model.pkl')
-DATA_PATH = os.path.join(os.path.dirname(__file__), 'features.csv')
 
-# ---- Load trained model, scaler, feature list, threshold ----
-with open(MODEL_PATH, 'rb') as f:
-    bundle = pickle.load(f)
-MODEL = bundle['model']
-SCALER = bundle['scaler']
-FEATURE_COLS = bundle['features']
-THRESHOLD = bundle['threshold']
+def validate_inputs(data: dict) -> dict:
+    if not isinstance(data, dict):
+        raise ValueError("A JSON object is required.")
+    missing = [field for field in RAW_INPUT_FIELDS if field not in data]
+    if missing:
+        raise ValueError(f"Missing fields: {', '.join(missing)}")
+    try:
+        record = {field: float(data[field]) for field in RAW_INPUT_FIELDS}
+    except (TypeError, ValueError) as exc:
+        raise ValueError("All academic indicators must be numeric.") from exc
 
-RAW_INPUT_FIELDS = ['attendance_pct', 'homework_pct', 'midterm_score', 'study_hours_per_week']
-
-students = {}
-next_id = 1
-
-
-def load_seed_data():
-    global next_id
-    if not os.path.exists(DATA_PATH):
-        return
-    with open(DATA_PATH, newline='') as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            sid = int(row['student_id'])
-            record = {k: float(row[k]) for k in RAW_INPUT_FIELDS}
-            record['student_id'] = sid
-            record['actual_pass'] = int(float(row['pass']))
-            derived = engineer_features(record)
-            record.update(derived)
-            record['prediction'], record['risk_probability'], record['risk_flag'] = predict(record)
-            students[sid] = record
-            next_id = max(next_id, sid + 1)
+    for field in ("attendance_pct", "homework_pct", "midterm_score"):
+        if not 0 <= record[field] <= 100:
+            raise ValueError(f"{field} must be between 0 and 100.")
+    if not 0 <= record["study_hours_per_week"] <= 80:
+        raise ValueError("study_hours_per_week must be between 0 and 80.")
+    return record
 
 
-def engineer_features(record):
-    """Data Engineer role logic, reapplied to a single new record."""
-    attendance = record['attendance_pct']
-    homework = record['homework_pct']
-    midterm = record['midterm_score']
-    study_hours = record['study_hours_per_week'] or 1
+def score_record(record: dict) -> dict:
+    enriched = {**record, **engineer_features(record)}
+    frame = pd.DataFrame(
+        [[enriched[column] for column in FEATURE_COLS]], columns=FEATURE_COLS
+    )
+    risk_probability = float(MODEL.predict_proba(frame)[0][1])
+    predicted_at_risk = risk_probability >= THRESHOLD
+    medium_boundary = max(0.20, THRESHOLD * 0.55)
+    if predicted_at_risk:
+        risk_flag = "high"
+    elif risk_probability >= medium_boundary:
+        risk_flag = "medium"
+    else:
+        risk_flag = "low"
 
-    absence_rate = (100 - attendance) / 100
-    performance_score = 0.4 * midterm + 0.3 * homework + 0.3 * attendance
-    study_efficiency = midterm / study_hours
-    low_engagement_flag = 1 if (attendance < 70 or homework < 60) else 0
+    enriched.update(
+        {
+            "prediction": 0 if predicted_at_risk else 1,
+            "predicted_outcome": "fail" if predicted_at_risk else "pass",
+            "risk_probability": round(risk_probability, 4),
+            "pass_probability": round(1.0 - risk_probability, 4),
+            "risk_flag": risk_flag,
+            "recommendation": recommendation_for(risk_flag),
+        }
+    )
+    return enriched
 
+
+def recommendation_for(risk_flag: str) -> str:
+    if risk_flag == "high":
+        return "Prioritise an adviser check-in and an academic support plan."
+    if risk_flag == "medium":
+        return "Monitor weekly and offer targeted study or attendance support."
+    return "Continue routine monitoring and reinforce current study habits."
+
+
+def seed_students() -> dict[int, dict]:
+    records: dict[int, dict] = {}
+    with DATA_PATH.open(newline="", encoding="utf-8") as handle:
+        for row in csv.DictReader(handle):
+            student_id = int(row["student_id"])
+            base = {field: float(row[field]) for field in RAW_INPUT_FIELDS}
+            base.update(
+                {
+                    "student_id": student_id,
+                    "student_name": f"Student {student_id:03d}",
+                    "actual_outcome": "pass" if int(float(row["pass"])) else "fail",
+                    "record_source": "seed",
+                }
+            )
+            records[student_id] = score_record(base)
+    return records
+
+
+def load_students() -> dict[int, dict]:
+    if not RECORDS_PATH.exists():
+        return seed_students()
+    try:
+        saved = json.loads(RECORDS_PATH.read_text(encoding="utf-8"))
+        return {int(item["student_id"]): score_record(item) for item in saved}
+    except (OSError, ValueError, KeyError, TypeError):
+        return seed_students()
+
+
+students = load_students()
+next_id = max(students, default=0) + 1
+
+
+def persist_students() -> None:
+    RECORDS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    temporary = RECORDS_PATH.with_suffix(".tmp")
+    temporary.write_text(
+        json.dumps(list(students.values()), indent=2), encoding="utf-8"
+    )
+    os.replace(temporary, RECORDS_PATH)
+
+
+def ordered_students() -> list[dict]:
+    return sorted(
+        students.values(),
+        key=lambda item: (-float(item["risk_probability"]), int(item["student_id"])),
+    )
+
+
+def model_metrics() -> dict:
+    if METRICS_PATH.exists():
+        return json.loads(METRICS_PATH.read_text(encoding="utf-8"))
     return {
-        'absence_rate': absence_rate,
-        'performance_score': performance_score,
-        'study_efficiency': study_efficiency,
-        'low_engagement_flag': low_engagement_flag,
+        **BUNDLE.get("metrics", {}),
+        "model_type": BUNDLE.get("model_type", "Logistic Regression"),
+        "positive_class": "at_risk",
     }
 
-def predict(record):
-    """Run the ML Core Modeler's Logistic Regression model on one record."""
-    X = pd.DataFrame([[record[col] for col in FEATURE_COLS]], columns=FEATURE_COLS)
-    X_scaled = SCALER.transform(X)
-    prob_pass = MODEL.predict_proba(X_scaled)[0][1]
-    prediction = 1 if prob_pass >= THRESHOLD else 0
-    if prob_pass < THRESHOLD:
-        risk_flag = 'high'
-    elif prob_pass < 0.65:
-        risk_flag = 'medium'
-    else:
-        risk_flag = 'low'
-    return prediction, round(float(prob_pass), 4), risk_flag
 
 ALLOWED_ORIGINS = [
-    o.strip() for o in os.environ.get('ALLOWED_ORIGINS', '*').split(',') if o.strip()
+    value.strip()
+    for value in os.environ.get("ALLOWED_ORIGINS", "*").split(",")
+    if value.strip()
 ]
 
 
 @app.after_request
 def add_cors_headers(response):
-    origin = request.headers.get('Origin')
-    if ALLOWED_ORIGINS == ['*']:
-        response.headers['Access-Control-Allow-Origin'] = '*'
+    origin = request.headers.get("Origin")
+    if ALLOWED_ORIGINS == ["*"]:
+        response.headers["Access-Control-Allow-Origin"] = "*"
     elif origin in ALLOWED_ORIGINS:
-        response.headers['Access-Control-Allow-Origin'] = origin
-        response.headers['Vary'] = 'Origin'
-    response.headers['Access-Control-Allow-Methods'] = 'GET, POST, DELETE, OPTIONS'
-    response.headers['Access-Control-Allow-Headers'] = 'Content-Type'
+        response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Vary"] = "Origin"
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, DELETE, OPTIONS"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type"
     return response
 
 
-@app.route('/api/students', methods=['GET'])
+@app.route("/api/health", methods=["GET"])
+def health():
+    return jsonify(
+        {
+            "status": "ok",
+            "students_loaded": len(students),
+            "model_type": BUNDLE.get("model_type", "Logistic Regression"),
+            "model_version": BUNDLE.get("model_version", "2.0"),
+            "positive_class": "at_risk",
+            "decision_threshold": THRESHOLD,
+        }
+    )
+
+
+@app.route("/api/students", methods=["GET"])
 def get_students():
-    return jsonify(list(students.values()))
+    return jsonify(ordered_students())
 
 
-@app.route('/api/students/<int:student_id>', methods=['GET'])
-def get_student(student_id):
+@app.route("/api/students/<int:student_id>", methods=["GET"])
+def get_student(student_id: int):
     student = students.get(student_id)
-    if not student:
-        return jsonify({'error': 'Student not found'}), 404
+    if student is None:
+        return jsonify({"error": "Student not found."}), 404
     return jsonify(student)
 
 
-@app.route('/api/students', methods=['POST'])
+@app.route("/api/students", methods=["POST"])
 def add_student():
     global next_id
     data = request.get_json(silent=True)
-    if not data:
-        return jsonify({'error': 'Missing JSON body'}), 400
-
-    missing = [f for f in RAW_INPUT_FIELDS if f not in data]
-    if missing:
-        return jsonify({'error': f'Missing fields: {", ".join(missing)}'}), 400
-
     try:
-        record = {f: float(data[f]) for f in RAW_INPUT_FIELDS}
-    except (TypeError, ValueError):
-        return jsonify({'error': 'All fields must be numeric'}), 400
+        record = validate_inputs(data)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
 
-    if not (0 <= record['attendance_pct'] <= 100):
-        return jsonify({'error': 'attendance_pct must be between 0 and 100'}), 400
-    if not (0 <= record['homework_pct'] <= 100):
-        return jsonify({'error': 'homework_pct must be between 0 and 100'}), 400
-    if not (0 <= record['midterm_score'] <= 100):
-        return jsonify({'error': 'midterm_score must be between 0 and 100'}), 400
-    if record['study_hours_per_week'] < 0:
-        return jsonify({'error': 'study_hours_per_week cannot be negative'}), 400
+    with LOCK:
+        requested_id = data.get("student_id")
+        if requested_id is None:
+            student_id = next_id
+        else:
+            try:
+                student_id = int(requested_id)
+            except (TypeError, ValueError):
+                return jsonify({"error": "student_id must be an integer."}), 400
+            if student_id <= 0:
+                return jsonify({"error": "student_id must be positive."}), 400
+            if student_id in students:
+                return jsonify({"error": "student_id already exists."}), 409
 
-    student_id = data.get('student_id', next_id)
-    record['student_id'] = student_id
-    record.update(engineer_features(record))
-    record['prediction'], record['risk_probability'], record['risk_flag'] = predict(record)
+        name = str(data.get("student_name", "")).strip() or f"Student {student_id:03d}"
+        if len(name) > 80:
+            return jsonify({"error": "student_name must be 80 characters or fewer."}), 400
 
-    students[student_id] = record
-    next_id = max(next_id, student_id + 1)
+        record.update(
+            {
+                "student_id": student_id,
+                "student_name": name,
+                "record_source": "entered",
+            }
+        )
+        actual = str(data.get("actual_outcome", "")).lower().strip()
+        if actual:
+            if actual not in {"pass", "fail"}:
+                return jsonify({"error": "actual_outcome must be pass or fail."}), 400
+            record["actual_outcome"] = actual
 
-    return jsonify(record), 201
+        saved = score_record(record)
+        students[student_id] = saved
+        next_id = max(next_id, student_id + 1)
+        persist_students()
+    return jsonify(saved), 201
 
 
-@app.route('/api/predict', methods=['POST'])
+@app.route("/api/predict", methods=["POST"])
 def predict_only():
-    """What-if endpoint: run a prediction without saving the student."""
     data = request.get_json(silent=True)
-    if not data:
-        return jsonify({'error': 'Missing JSON body'}), 400
-
-    missing = [f for f in RAW_INPUT_FIELDS if f not in data]
-    if missing:
-        return jsonify({'error': f'Missing fields: {", ".join(missing)}'}), 400
-
     try:
-        record = {f: float(data[f]) for f in RAW_INPUT_FIELDS}
-    except (TypeError, ValueError):
-        return jsonify({'error': 'All fields must be numeric'}), 400
-
-    record.update(engineer_features(record))
-    prediction, prob, risk_flag = predict(record)
-
-    return jsonify({
-        'prediction': prediction,
-        'risk_probability': prob,
-        'risk_flag': risk_flag,
-    })
-
-@app.route('/api/students/<int:student_id>', methods=['DELETE'])
-def delete_student(student_id):
-    if student_id not in students:
-        return jsonify({'error': 'Student not found'}), 404
-    del students[student_id]
-    return jsonify({'message': 'Deleted'}), 200
+        record = validate_inputs(data)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    result = score_record(record)
+    return jsonify(result)
 
 
-@app.route('/api/health', methods=['GET'])
-def health():
-    return jsonify({'status': 'ok', 'students_loaded': len(students), 'threshold': THRESHOLD})
+@app.route("/api/students/<int:student_id>", methods=["DELETE"])
+def delete_student(student_id: int):
+    with LOCK:
+        if student_id not in students:
+            return jsonify({"error": "Student not found."}), 404
+        del students[student_id]
+        persist_students()
+    return jsonify({"message": "Student deleted.", "student_id": student_id})
 
 
-load_seed_data()
-print(f"Loaded {len(students)} students. Threshold = {THRESHOLD}")
+@app.route("/api/model-metrics", methods=["GET"])
+def get_model_metrics():
+    return jsonify(model_metrics())
 
-if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))
-    app.run(debug=True, host='0.0.0.0', port=port)
+
+@app.route("/api/feature-engineering", methods=["GET"])
+def get_feature_engineering():
+    return jsonify(
+        {
+            "raw_inputs": RAW_INPUT_FIELDS,
+            "engineered_features": {
+                "absence_rate": "(100 - attendance_pct) / 100",
+                "performance_score": "40% midterm + 30% homework + 30% attendance",
+                "study_efficiency": "midterm_score / max(study_hours_per_week, 1)",
+                "low_engagement_flag": "attendance < 70% or homework < 60%",
+            },
+        }
+    )
+
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
+    app.run(
+        debug=os.environ.get("FLASK_DEBUG", "0") == "1",
+        host="0.0.0.0",
+        port=port,
+    )
